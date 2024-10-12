@@ -1,0 +1,776 @@
+echo "# edu-tool" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/JoasOlal59/edu-tool.git
+git push -u origin main
+git remote add origin https://github.com/JoasOlal59/123.git
+git branch -M main
+git push -u origin main
+ai-edu-tools/
+├── components/
+│   ├── Layout.tsx
+│   ├── SchemeOfWorkGenerator.tsx
+│   ├── SchemeOfWorkDisplay.tsx
+│   ├── LessonPlanGenerator.tsx
+│   └── ErrorBoundary.tsx
+├── pages/
+│   ├── index.tsx
+│   ├── login.tsx
+│   ├── scheme-of-work.tsx
+│   ├── lesson-plan.tsx
+│   ├── admin.tsx
+│   ├── _app.tsx
+│   └── api/
+│       ├── login.ts
+│       ├── logout.ts
+│       ├── refresh-token.ts
+│       ├── users.ts
+│       ├── assign-role.ts
+│       ├── generate-scheme.ts
+│       ├── schemes.ts
+│       ├── generate-lesson-plan.ts
+│       └── feedback.ts
+├── styles/
+│   └── globals.css
+├── utils/
+│   ├── auth.ts
+│   ├── errorHandler.ts
+│   └── api.ts
+├── hooks/
+│   └── useAuth.ts
+├── stores/
+│   └── authStore.ts
+├── types/
+│   ├── User.ts
+│   └── SchemeOfWork.ts
+├── lib/
+│   └── prisma.ts
+├── prisma/
+│   └── schema.prisma
+├── public/
+│   ├── favicon.ico
+│   └── manifest.json
+├── .env
+├── .env.local
+├── .gitignore
+├── next.config.js
+├── package.json
+├── tsconfig.json
+└── README.md
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  role      String   @default("student")
+  schemes   SchemeOfWork[]
+  feedback  Feedback[]
+}
+
+model SchemeOfWork {
+  id                Int      @id @default(autoincrement())
+  userId            Int
+  user              User     @relation(fields: [userId], references: [id])
+  title             String
+  institution       String
+  course            String
+  level             String
+  subject           String
+  class             String
+  numberOfLearners  Int
+  dateOfPreparation DateTime
+  dateOfRevision    DateTime
+  syllabusTopics    String[]
+  lessons           Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Feedback {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
+}
+export interface User {
+  id: number;
+  email: string;
+  role: 'student' | 'teacher' | 'admin';
+}
+export interface LessonPlan {
+  week: number;
+  lesson: number;
+  objective: string;
+  keyPoints: string[];
+  activities: string;
+  resources: string[];
+}
+
+export interface SchemeOfWork {
+  id?: number;
+  userId: number;
+  title: string;
+  institution: string;
+  course: string;
+  level: string;
+  subject: string;
+  class: string;
+  numberOfLearners: number;
+  dateOfPreparation: Date;
+  dateOfRevision: Date;
+  syllabusTopics: string[];
+  lessons: LessonPlan[];
+}
+import { NextApiResponse } from 'next'
+
+export class AppError extends Error {
+  statusCode: number
+  constructor(message: string, statusCode: number) {
+    super(message)
+    this.statusCode = statusCode
+  }
+}
+
+export const handleError = (error: unknown, res: NextApiResponse) => {
+  if (error instanceof AppError) {
+    res.status(error.statusCode).json({ message: error.message })
+  } else {
+    console.error(error)
+    res.status(500).json({ message: 'Internal server error' })
+  }
+}
+import axios from 'axios'
+
+const api = axios.create({
+  baseURL: '/api',
+})
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
+  return config
+})
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response.status === 401) {
+      // Attempt to refresh the token
+      try {
+        const refreshToken = localStorage.getItem('refreshToken')
+        const response = await axios.post('/api/refresh-token', { refreshToken })
+        localStorage.setItem('token', response.data.token)
+        error.config.headers['Authorization'] = `Bearer ${response.data.token}`
+        return axios(error.config)
+      } catch (refreshError) {
+        // If refresh fails, redirect to login
+        window.location.href = '/login'
+        return Promise.reject(refreshError)
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+export default api
+import create from 'zustand'
+import { User } from '../types/User'
+import api from '../utils/api'
+
+interface AuthState {
+  user: User | null
+  setUser: (user: User | null) => void
+  login: (email: string, password: string) => Promise<void>
+  logout: () => void
+  refreshToken: () => Promise<void>
+}
+
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  setUser: (user) => set({ user }),
+  login: async (email, password) => {
+    const response = await api.post('/login', { email, password })
+    localStorage.setItem('token', response.data.token)
+    localStorage.setItem('refreshToken', response.data.refreshToken)
+    set({ user: response.data.user })
+  },
+  logout: () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('refreshToken')
+    set({ user: null })
+  },
+  refreshToken: async () => {
+    try {
+      const refreshToken = localStorage.getItem('refreshToken')
+      if (!refreshToken) throw new Error('No refresh token')
+      const response = await api.post('/refresh-token', { refreshToken })
+      localStorage.setItem('token', response.data.token)
+      set({ user: response.data.user })
+    } catch (error) {
+      set({ user: null })
+      throw error
+    }
+  },
+}))
+import { useEffect } from 'react'
+import { useAuthStore } from '../stores/authStore'
+import { useRouter } from 'next/router'
+
+export function useAuth() {
+  const { user, login, logout, refreshToken } = useAuthStore()
+  const router = useRouter()
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await refreshToken()
+      } catch (err) {
+        console.error('Failed to refresh token:', err)
+      }
+    }
+
+    initAuth()
+
+    const refreshInterval = setInterval(() => {
+      if (user) refreshToken()
+    }, 14 * 60 * 1000) // Refresh token every 14 minutes
+
+    return () => clearInterval(refreshInterval)
+  }, [user, refreshToken])
+
+  const handleLogin = async (email: string, password: string) => {
+    try {
+      await login(email, password)
+      router.push('/')
+    } catch (error) {
+      console.error('Login failed:', error)
+      throw error
+    }
+  }
+
+  const handleLogout = () => {
+    logout()
+    router.push('/login')
+  }
+
+  return { user, login: handleLogin, logout: handleLogout }
+}
+import React from 'react'
+import Link from 'next/link'
+import { useAuth } from '../hooks/useAuth'
+
+interface LayoutProps {
+  children: React.ReactNode
+}
+
+const Layout: React.FC<LayoutProps> = ({ children }) => {
+  const { user, logout } = useAuth()
+
+  return (
+    <div className="layout">
+      <header>
+        <nav>
+          <Link href="/">Home</Link>
+          {user ? (
+            <>
+              {(user.role === 'teacher' || user.role === 'admin') && (
+                <>
+                  <Link href="/scheme-of-work">Scheme of Work</Link>
+                  <Link href="/lesson-plan">Lesson Plan</Link>
+                </>
+              )}
+              {user.role === 'admin' && (
+                <Link href="/admin">Admin Dashboard</Link>
+              )}
+              <button onClick={logout}>Logout</button>
+            </>
+          ) : (
+            <Link href="/login">Login</Link>
+          )}
+        </nav>
+      </header>
+      <main>{children}</main>
+      <footer>© 2023 AI-Powered Education Tools</footer>
+    </div>
+  )
+}
+
+export default Layout
+import React, { ErrorInfo, ReactNode } from 'react'
+
+interface Props {
+  children: ReactNode
+}
+
+interface State {
+  hasError: boolean
+}
+
+class ErrorBoundary extends React.Component<Props, State> {
+  constructor(props: Props) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError(_: Error): State {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Uncaught error:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <h1>Sorry.. there was an error</h1>
+    }
+
+    return this.props.children
+  }
+}
+
+export default ErrorBoundary
+import type { AppProps } from 'next/app'
+import Layout from '../components/Layout'
+import ErrorBoundary from '../components/ErrorBoundary'
+import '../styles/globals.css'
+
+function MyApp({ Component, pageProps }: AppProps) {
+  return (
+    <ErrorBoundary>
+      <Layout>
+        <Component {...pageProps} />
+      </Layout>
+    </ErrorBoundary>
+  )
+}
+
+export default MyApp
+import React from 'react'
+import Link from 'next/link'
+import { useAuth } from '../hooks/useAuth'
+
+export default function Home() {
+  const { user } = useAuth()
+
+  return (
+    <div>
+      <h1>AI-Powered Education Tools</h1>
+      {user ? (
+        <nav>
+          {(user.role === 'teacher' || user.role === 'admin') && (
+            <>
+              <Link href="/scheme-of-work">Generate Scheme of Work</Link>
+              <Link href="/lesson-plan">Generate Lesson Plan</Link>
+            </>
+          )}
+          {user.role === 'admin' && (
+            <Link href="/admin">Admin Dashboard</Link>
+          )}
+        </nav>
+      ) : (
+        <p>Please log in to access tools.</p>
+      )}
+    </div>
+  )
+}
+import React, { useState } from 'react'
+import { useAuth } from '../hooks/useAuth'
+
+const LoginPage: React.FC = () => {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const { login } = useAuth()
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    try {
+      await login(email, password)
+    } catch (err) {
+      setError('Login failed. Please check your credentials.')
+    }
+  }
+
+  return (
+    <div>
+      <h1>Login</h1>
+      {error && <p className="error">{error}</p>}
+      <form onSubmit={handleSubmit}>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email"
+          required
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          required
+        />
+        <button type="submit">Login</button>
+      </form>
+    </div>
+  )
+}
+
+export default LoginPage
+import React, { useState } from 'react'
+import { useAuth } from '../hooks/useAuth'
+import SchemeOfWorkGenerator from '../components/SchemeOfWorkGenerator'
+import SchemeOfWorkDisplay from '../components/SchemeOfWorkDisplay'
+import { SchemeOfWork } from '../types/SchemeOfWork'
+import api from '../utils/api'
+
+const SchemeOfWorkPage: React.FC = () => {
+  const { user } = useAuth()
+  const [schemeOfWork, setSchemeOfWork] = useState<SchemeOfWork | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+    return <p>Access denied. You must be a teacher or admin to view this page.</p>
+  }
+
+  const handleGenerateScheme = async (formData: Partial<SchemeOfWork>) => {
+    try {
+      setError(null)
+      const response = await api.post('/generate-scheme', formData)
+      setSchemeOfWork(response.data)
+    } catch (err) {
+      setError('Failed to generate scheme of work. Please try again.')
+      console.error(err)
+    }
+  }
+
+  return (
+    <div>
+      <h1>Scheme of Work Generator</h1>
+      {error && <p className="error">{error}</p>}
+      <SchemeOfWorkGenerator onSubmit={handleGenerateScheme} />
+      {schemeOfWork && <SchemeOfWorkDisplay scheme={schemeOfWork} />}
+    </div>
+  )
+}
+
+export default SchemeOfWorkPage
+import React, { useState } from 'react'
+import { useAuth } from '../hooks/useAuth'
+import LessonPlanGenerator from '../components/LessonPlanGenerator'
+import api from '../utils/api'
+
+const LessonPlanPage: React.FC = () => {
+  const { user } = useAuth()
+  const [lessonPlan, setLessonPlan] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+    return <p>Access denied. You must be a teacher or admin to view this page.</p>
+  }
+
+  const handleGenerateLessonPlan = async (topic: string, learningObjectives: string[]) => {
+    try {
+      setError(null)
+      const response = await api.post('/generate-lesson-plan', { topic, learningObjectives })
+      setLessonPlan(response.data.lessonPlan)
+    } catch (err) {
+      setError('Failed to generate lesson plan. Please try again.')
+      console.error(err)
+    }
+  }
+
+  return (
+    <div>
+      <h1>Lesson Plan Generator</h1>
+      {error && <p className="error">{error}</p>}
+      <LessonPlanGenerator onSubmit={handleGenerateLessonPlan} />
+      {lessonPlan && (
+        <div>
+          <h2>Generated Lesson Plan:</h2>
+          <pre>{lessonPlan}</pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default LessonPlanPage
+import React, { useState, useEffect } from 'react'
+import { useAuth } from '../hooks/useAuth'
+import api from '../utils/api'
+import { User } from '../types/User'
+
+const AdminPage: React.FC = () => {
+  const { user } = useAuth()
+  const [users, setUsers] = useState<User[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const response = await api.get('/users')
+        setUsers(response.data)
+      } catch (err) {
+        setError('Failed to fetch users')
+        console.error(err)
+      }
+    }
+
+    if (user?.role === 'admin') {
+      fetchUsers()
+    }
+  }, [user])
+
+  if (!user || user.role !== 'admin') {
+    return <p>Access denied. You must be an admin to view this page.</p>
+  }
+
+  const handleRoleChange = async (userId: number, newRole: string) => {
+    try {
+      await api.post('/assign-role', { userId, role: newRole })
+      setUsers(users.map(u => u.id === userId ? { ...u, role: newRole as User['role'] } : u))
+    } catch (err) {
+      setError('Failed to update user role')
+      console.error(err)
+    }
+  }
+
+  return (
+    <div>
+      <h1>Admin Dashboard</h1>
+      {error && <p className="error">{error}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.map(user => (
+            <tr key={user.id}>
+              <td>{user.email}</td>
+              <td>{user.role}</td>
+              <td>
+                <select
+                  value={user.role}
+                  onChange={(e) => handleRoleChange(user.id, e.target.value)}
+                >
+                  <option value="student">Student</option>
+                  <option value="teacher">Teacher</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+export default AdminPage
+import React, { useState } from 'react'
+import { SchemeOfWork } from '../types/SchemeOfWork'
+
+interface Props {
+  onSubmit: (formData: Partial<SchemeOfWork>) => void
+}
+
+const SchemeOfWorkGenerator: React.FC<Props> = ({ onSubmit }) => {
+  const [formData, setFormData] = useState<Partial<SchemeOfWork>>({
+    title: '',
+    institution: '',
+    course: '',
+    level: '',
+    subject: '',
+    class: '',
+    numberOfLearners: 0,
+    dateOfPreparation: new Date().toISOString().split('T')[0],
+    dateOfRevision: new Date().toISOString().split('T')[0],
+    syllabusTopics: [],
+  })
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    onSubmit(formData)
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="text"
+        name="title"
+        value={formData.title}
+        onChange={handleChange}
+        placeholder="Title"
+        required
+      />
+      {/* Add more input fields for other SchemeOfWork properties */}
+      <textarea
+        name="syllabusTopics"
+        value={formData.syllabusTopics?.join(', ')}
+        onChange={(e) => setFormData(prev => ({ ...prev, syllabusTopics: e.target.value.split(',').map(t => t.trim()) }))}
+        placeholder="Syllabus Topics (comma-separated)"
+        required
+      />
+      <button type="submit">Generate Scheme of Work</button>
+    </form>
+  )
+}
+
+export default SchemeOfWorkGenerator
+import React from 'react'
+import { SchemeOfWork } from '../types/SchemeOfWork'
+
+interface Props {
+  scheme: SchemeOfWork
+}
+
+const SchemeOfWorkDisplay: React.FC<Props> = ({ scheme }) => {
+  return (
+    <div>
+      <h2>{scheme.title}</h2>
+      <p>Institution: {scheme.institution}</p>
+      <p>Course: {scheme.course}</p>
+      <p>Level: {scheme.level}</p>
+      <p>Subject: {scheme.subject}</p>
+      <p>Class: {scheme.class}</p>
+      <p>Number of Learners: {scheme.numberOfLearners}</p>
+      <p>Date of Preparation: {new Date(scheme.dateOfPreparation).toLocaleDateString()}</p>
+      <p>Date of Revision: {new Date(scheme.dateOfRevision).toLocaleDateString()}</p>
+      <h3>Syllabus Topics:</h3>
+      <ul>
+        {scheme.syllabusTopics.map((topic, index) => (
+          <li key={index}>{topic}</li>
+        ))}
+      </ul>
+      <h3>Lessons:</h3>
+      {scheme.lessons.map((lesson, index) => (
+        <div key={index}>
+          <h4>Week {lesson.week}, Lesson {lesson.lesson}</h4>
+          <p>Objective: {lesson.objective}</p>
+          <p>Key Points:</p>
+          <ul>
+            {lesson.keyPoints.map((point, i) => (
+              <li key={i}>{point}</li>
+            ))}
+          </ul>
+          <p>Activities: {lesson.activities}</p>
+          <p>Resources:</p>
+          <ul>
+            {lesson.resources.map((resource, i) => (
+              <li key={i}>{resource}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default SchemeOfWorkDisplay
+import React, { useState } from 'react'
+
+interface Props {
+  onSubmit: (topic: string, learningObjectives: string[]) => void
+}
+
+const LessonPlanGenerator: React.FC<Props> = ({ onSubmit }) => {
+  const [topic, setTopic] = useState('')
+  const [learningObjectives, setLearningObjectives] = useState('')
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    onSubmit(topic, learningObjectives.split(',').map(obj => obj.trim()))
+  }
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <input
+        type="text"
+        value={topic}
+        onChange={(e) => setTopic(e.target.value)}
+        placeholder="Topic"
+        required
+      />
+      <textarea
+        value={learningObjectives}
+        onChange={(e) => setLearningObjectives(e.target.value)}
+        placeholder="Learning Objectives (comma-separated)"
+        required
+      />
+      <button type="submit">Generate Lesson Plan</button>
+    </form>
+  )
+}
+
+export default LessonPlanGenerator
+import { PrismaClient } from '@prisma/client'
+
+let prisma: PrismaClient
+
+if (process.env.NODE_ENV === 'production') {
+  prisma = new PrismaClient()
+} else {
+  if (!global.prisma) {
+    global.prisma = new PrismaClient()
+  }
+  prisma = global.prisma
+}
+
+export default prisma
+import type { NextApiRequest, NextApiResponse } from 'next'
+import bcrypt from 'bcrypt'
+import jwt from 'jsonwebtoken'
+import prisma from '../../lib/prisma'
+import { AppError, handleError } from '../../utils/errorHandler'
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ message: 'Method not allowed' })
+  }
+
+  try {
+    const { email, password } = req.body
+
+    const user = await prisma.user.findUnique({ where: { email } })
+    if (!user) {
+      throw new AppError('Invalid credentials', 401)
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password)
+    if (!isPasswordValid) {
+      throw new AppError('Invalid credentials', 401)
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '15m' })
+    const refreshToken = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_REFRESH_SECRET!, { expiresIn: '7d' })
+
+    res.status(200).json({ user: { id: user.id, email: user.email, role: user.role }, token, refreshToken })
+  } catch (error) {
+    handleError(error, res)
+  }
+}
